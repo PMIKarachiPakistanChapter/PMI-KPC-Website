@@ -1,0 +1,11 @@
+screenshot  = screenshot_pmi.png
+name        = PMI Karachi Pakistan Chapter
+description = Theme for PMI Karachi Pakistan Chapter.
+
+core        = 7.x
+base theme  = bartik
+
+; Information added by drupal.org packaging script on 2011-08-31
+version = "7.8"
+project = "pmikpc"
+datestamp = "1314817616"

@@ -1,0 +1,138 @@
+<?php
+
+/**
+ * @file
+ * An example of simpletest tests to accompany the tutorial at
+ * http://drupal.org/node/890654.
+ */
+
+class UIFTestCaseSimple extends DrupalWebTestCase {
+  protected $admin_user;
+  protected $import_user;
+
+  public static function getInfo() {
+    return array(
+      'name' => 'Simple import',
+      'description' => 'Test basic import framework.',
+      'group' => 'User Import Framework',
+    );
+  }
+
+  public function setUp() {
+    parent::setUp('uif');
+    $this->import_user = $this->drupalCreateUser(array('import users'));
+    $this->admin_user = $this->drupalCreateUser(array('administer users'));
+  }
+
+  // Do successful import
+  public function testUIFImportSuccessful() {
+    $this->drupalLogin($this->import_user);
+    
+    $edit = array();
+    $edit['files[user_upload]'] = DRUPAL_ROOT . '/' . drupal_get_path('module', 'uif') . '/test_data/test_1.csv';
+    $this->drupalPost('admin/people/uif', $edit, t('Next'));
+    $this->assertText(t('Preview these records and when ready to import click Import users', array()));
+    $this->assertText(t('jane@example.com', array()));
+    $this->assertText(t('(create)', array()));
+    $this->assertText(t('email', array()));
+    $this->assertText(t('username', array()));
+    $this->assertText(t('password', array()));
+    
+    $this->drupalPost(NULL, array(), t('Import users'));
+    $this->assertText(t('User import complete', array()));
+    $this->assertText(t('One user was created', array()));
+    
+    // Retrieve imported user
+    $name = 'jane';
+    $user = user_load_by_name($name);
+    $this->assertTrue($user != NULL, t('User @name was loaded', array('@name' => $name)));
+    $user->pass_raw = 'zebra';
+    $this->drupalLogin($user);
+  }
+
+  // Do successful import
+  public function testUIFImportUnsuccessful() {
+    $this->drupalLogin($this->import_user);
+    
+    $edit = array();
+    $edit['files[user_upload]'] = DRUPAL_ROOT . '/' . drupal_get_path('module', 'uif') . '/test_data/test_2.csv';
+    $this->drupalPost('admin/people/uif', $edit, t('Next'));
+    $this->assertText(t('Missing or invalid email address', array()));
+  }
+}
+
+class UIFTestCaseUserFields extends DrupalWebTestCase {
+  protected $admin_user;
+  protected $import_user;
+
+  public static function getInfo() {
+    return array(
+      'name' => 'Import with user fields',
+      'description' => 'Test user import framework with additional user fields.',
+      'group' => 'User Import Framework',
+    );
+  }
+
+  public function setUp() {
+    parent::setUp('uif', 'uif_example');
+    $this->import_user = $this->drupalCreateUser(array('import users'));
+    $this->admin_user = $this->drupalCreateUser(array('administer users'));
+  }
+
+  // Successful field additions
+  public function testUIFImportWithUserFieldsSuccessful() {
+    $this->drupalLogin($this->admin_user);
+
+    $edit = array();
+    $edit['fields[_add_new_field][label]'] = 'First name';
+    $edit['fields[_add_new_field][field_name]'] = 'first_name';
+    $edit['fields[_add_new_field][type]'] = 'text';
+    $edit['fields[_add_new_field][widget_type]'] = 'text_textfield';
+    $this->drupalPost('admin/config/people/accounts/fields', $edit, t('Save'));
+    $this->assertText(t('These settings apply to the @label field everywhere it is used.', array('@label' => $edit['fields[_add_new_field][label]'])));
+    
+    $this->drupalLogin($this->import_user);
+
+    $edit = array();
+    $edit['files[user_upload]'] = DRUPAL_ROOT . '/' . drupal_get_path('module', 'uif_example') . '/data/example_1.csv';
+    $this->drupalPost('admin/people/uif', $edit, t('Next'));
+    $this->assertText(t('Preview these records and when ready to import click Import users', array()));
+    $this->assertText(t('wilma@example.com', array()));
+    $this->assertText(t('(create)', array()));
+    $this->assertText(t('email', array()));
+    $this->assertText(t('username', array()));
+    $this->assertText(t('password', array()));
+    $this->assertText(t('first_name', array()));
+    $this->assertText(t('last_name', array()));
+    
+    $this->drupalPost(NULL, array(), t('Import users'));
+    $this->assertText(t('User import complete', array()));
+    
+    // Retrieve imported user
+    $name = 'wilma';
+    $user = user_load_by_name($name);
+    $this->assertTrue($user != NULL, t('User @name was loaded', array('@name' => $name)));
+    $user->pass_raw = 'rubble';
+    $this->drupalLogin($user);
+  }
+
+  // Unsuccessful field additions
+  public function testUIFImportWithUserFieldsUnsuccessful() {
+    $this->drupalLogin($this->admin_user);
+
+    $edit = array();
+    $edit['fields[_add_new_field][label]'] = 'First name';
+    $edit['fields[_add_new_field][field_name]'] = 'first_name';
+    $edit['fields[_add_new_field][type]'] = 'text';
+    $edit['fields[_add_new_field][widget_type]'] = 'text_textfield';
+    $this->drupalPost('admin/config/people/accounts/fields', $edit, t('Save'));
+    $this->assertText(t('These settings apply to the @label field everywhere it is used.', array('@label' => $edit['fields[_add_new_field][label]'])));
+    
+    $this->drupalLogin($this->import_user);
+
+    $edit = array();
+    $edit['files[user_upload]'] = DRUPAL_ROOT . '/' . drupal_get_path('module', 'uif_example') . '/data/example_2_invalid_data.csv';
+    $this->drupalPost('admin/people/uif', $edit, t('Next'));
+    $this->assertText(t('Field last_name is required and is missing from the data', array()));
+  }
+}

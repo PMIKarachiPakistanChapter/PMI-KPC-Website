@@ -1,0 +1,38 @@
+<?php
+
+/**
+ * @file
+ * Installation functions for ImageMagick module.
+ */
+
+/**
+ * Implements hook_uninstall().
+ */
+function imagemagick_uninstall() {
+  variable_del('imagemagick_quality');
+  variable_del('imagemagick_convert');
+  variable_del('imagemagick_debug');
+}
+
+/**
+ * Migrate ImageAPI ImageMagick variables.
+ */
+function imagemagick_update_7000() {
+  $value = variable_get('imageapi_imagemagick_quality', NULL);
+  if (isset($value)) {
+    variable_set('imagemagick_quality', $value);
+  }
+  variable_del('imageapi_imagemagick_quality');
+
+  $value = variable_get('imageapi_imagemagick_convert', NULL);
+  if (isset($value)) {
+    variable_set('imagemagick_convert', $value);
+  }
+  variable_del('imageapi_imagemagick_convert');
+
+  $value = variable_get('imageapi_imagemagick_debugging', NULL);
+  if (isset($value)) {
+    variable_set('imagemagick_debug', $value);
+  }
+  variable_del('imageapi_imagemagick_debugging');
+}

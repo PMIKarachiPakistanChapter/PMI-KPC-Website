@@ -1,0 +1,489 @@
+<?php
+
+/**
+ * @file
+ * Provides ImageMagick integration.
+ */
+
+/**
+ * @ingroup image
+ * @{
+ */
+
+/**
+ * Implements hook_image_toolkits().
+ */
+function imagemagick_image_toolkits() {
+  return array(
+    'imagemagick' => array(
+      'title' => t('ImageMagick'),
+      'available' => TRUE,
+    ),
+  );
+}
+
+/**
+ * Retrieve settings for the ImageMagick toolkit.
+ */
+function image_imagemagick_settings() {
+  $form['imagemagick_quality'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Image quality'),
+    '#size' => 10,
+    '#maxlength' => 3,
+    '#default_value' => variable_get('imagemagick_quality', 75),
+    '#field_suffix' => '%',
+    '#element_validate' => array('imagemagick_element_validate_quality'),
+    '#description' => t('Define the image quality of processed images. Ranges from 0 to 100. Higher values mean better image quality but bigger files.'),
+  );
+
+  $form['imagemagick'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('ImageMagick'),
+    '#collapsible' => FALSE,
+    '#description' => t('ImageMagick is a stand-alone program for image manipulation. It must be installed on the server and you need to know where it is located. Consult your server administrator or hosting provider for details.'),
+  );
+  $form['imagemagick']['imagemagick_convert'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Path to the "convert" binary'),
+    '#default_value' => variable_get('imagemagick_convert', 'convert'),
+    '#required' => TRUE,
+    '#element_validate' => array('imagemagick_element_validate_path'),
+    '#description' => t('The complete path and filename of the ImageMagick <kbd>convert</kbd> binary. For example: <kbd>/usr/bin/convert</kbd> or <kbd>C:\Program Files\ImageMagick-6.3.4-Q16\convert.exe</kbd>'),
+  );
+  // Prepare sub-element to output version or errors.
+  $form['imagemagick']['version'] = array();
+  $form['imagemagick']['#after_build'] = array('_imagemagick_build_version');
+
+  $form['imagemagick']['imagemagick_debug'] = array(
+    '#type' => 'checkbox',
+    '#title' => t('Display debugging information'),
+    '#default_value' => variable_get('imagemagick_debug', 0),
+    '#description' => t('Shows ImageMagick commands and their output to users with the %permission permission.', array(
+      '%permission' => t('Administer site configuration'),
+    )),
+  );
+
+  return $form;
+}
+
+/**
+ * Form element validation handler for image quality settings field.
+ */
+function imagemagick_element_validate_quality($element, &$form_state) {
+  if (!is_numeric($element['#value']) || $element['#value'] < 0 || $element['#value'] > 100) {
+    form_error($element, t('!name must be a value between 0 and 100.', array('!name' => $element['#title'])));
+  }
+}
+
+/**
+ * Form element validation handler for convert executable path setting.
+ */
+function imagemagick_element_validate_path($element, &$form_state) {
+  if ($form_state['values']['image_toolkit'] == 'imagemagick') {
+    $form_state['imagemagick_errors'] = _imagemagick_check_path($element['#value']);
+    if ($form_state['imagemagick_errors']) {
+      form_error($element, implode('<br />', $form_state['imagemagick_errors']));
+    }
+  }
+}
+
+/**
+ * #after_build callback to output ImageMagick version or any errors in image toolkit settings form.
+ */
+function _imagemagick_build_version($element, &$form_state) {
+  // Do not attempt to output version information when the form is submitted.
+  // imagemagick_element_validate_path() performs the validation already.
+  if ($form_state['process_input']) {
+    return $element;
+  }
+  if (!isset($form_state['imagemagick_errors'])) {
+    $form_state['imagemagick_errors'] = _imagemagick_check_path($form_state['values']['imagemagick_convert']);
+  }
+  if ($form_state['imagemagick_errors']) {
+    $element['version'] = array(
+      '#markup' => '<p class="error">' . implode('<br />', $path_errors) . '</p>',
+    );
+  }
+  else {
+    _imagemagick_convert_exec('-version', $output, $errors);
+    $element['version'] = array(
+      '#type' => 'item',
+      '#title' => t('Version information'),
+      '#markup' => '<pre>' . check_plain(trim($output)) . '</pre>',
+      '#description' => t('ImageMagick was found and returns this version information.'),
+    );
+  }
+  return $element;
+}
+
+/**
+ * Verify file path of ImageMagick convert binary.
+ *
+ * @param $file
+ *   The user-submitted file path to the convert binary.
+ *
+ * @return
+ *   A list of errors indicating whether ImageMagick could not be found on this
+ *   machine, which is empty if it was found.
+ */
+function _imagemagick_check_path($file) {
+  $errors = array();
+
+  // If only the name of the executable is given, check whether it is in the
+  // path and can be invoked.
+  if ($file == 'convert' && dirname($file) === '.') {
+    $status = _imagemagick_convert_exec('-version', $output, $errors, $file);
+    if ($status === 0) {
+      return $errors;
+    }
+  }
+
+  if (!is_file($file)) {
+    $errors[] = t('The specified ImageMagick file path %file does not exist.', array('%file' => $file));
+  }
+  if (!$errors && !is_executable($file)) {
+    $errors[] = t('The specified ImageMagick file path %file is not executable.', array('%file' => $file));
+  }
+  if ($errors && ($open_basedir = ini_get('open_basedir'))) {
+    $errors[] = t('The PHP <a href="@php-url">open_basedir</a> security restriction is set to %open-basedir, which may prevent to locate ImageMagick.', array(
+      '%open-basedir' => $open_basedir,
+      '@php-url' => 'http://php.net/manual/en/ini.core.php#ini.open-basedir',
+    ));
+  }
+  return $errors;
+}
+
+/**
+ * Scales an image to the specified size.
+ *
+ * @param $image
+ *   An image object. The $image->resource, $image->info['width'], and
+ *   $image->info['height'] values will be modified by this call.
+ * @param $width
+ *   The new width of the resized image, in pixels.
+ * @param $height
+ *   The new height of the resized image, in pixels.
+ *
+ * @return
+ *   TRUE or FALSE, based on success.
+ *
+ * @see image_resize()
+ */
+function image_imagemagick_resize(stdClass $image, $width, $height) {
+  $image->ops[] = '-resize ' . (int) $width . 'x' . (int) $height . '!';
+  $image->info['width'] = $width;
+  $image->info['height'] = $height;
+  return TRUE;
+}
+
+/**
+ * Rotates an image the given number of degrees.
+ *
+ * @param $image
+ *   An image object. The $image->resource, $image->info['width'], and
+ *   $image->info['height'] values will be modified by this call.
+ * @param $degrees
+ *   The number of (clockwise) degrees to rotate the image.
+ * @param $background
+ *   An hexadecimal integer specifying the background color to use for the
+ *   uncovered area of the image after the rotation. E.g. 0x000000 for black,
+ *   0xff00ff for magenta, and 0xffffff for white. For images that support
+ *   transparency, this will default to transparent. Otherwise it will
+ *   be white.
+ *
+ * @return
+ *   TRUE or FALSE, based on success.
+ *
+ * @see image_rotate()
+ */
+function image_imagemagick_rotate(stdClass $image, $degrees, $background = NULL) {
+  if (!isset($background)) {
+    $image->ops[] = ' -rotate ' . (float) $degrees;
+  }
+  else {
+    // image_rotate_effect() converts the #hexadecimal color representation into
+    // a decimal value (integer). Convert it back into a hexadecimal color.
+    if (is_int($background)) {
+      $background = '#' . str_pad(dechex($background), 6, 0, STR_PAD_LEFT);
+    }
+    else {
+      $background = strtr($background, array('0x' => '#'));
+    }
+    $image->ops[] = '-background ' . escapeshellarg($background) . ' -rotate ' . (float) $degrees;
+  }
+  return TRUE;
+}
+
+/**
+ * Crops an image to the given coordinates.
+ *
+ * @param $image
+ *   An image object. The $image->resource, $image->info['width'], and
+ *   $image->info['height'] values will be modified by this call.
+ * @param $x
+ *   The starting x offset at which to start the crop, in pixels.
+ * @param $y
+ *   The starting y offset at which to start the crop, in pixels.
+ * @param $width
+ *   The width of the cropped area, in pixels.
+ * @param $height
+ *   The height of the cropped area, in pixels.
+ *
+ * @return
+ *   TRUE or FALSE, based on success.
+ *
+ * @see image_crop()
+ */
+function image_imagemagick_crop(stdClass $image, $x, $y, $width, $height) {
+  // Even though the crop effect in Drupal core does not allow for negative
+  // offsets, ImageMagick supports them.
+  $x_signed = (((int) $x) >= 0 ? '+' : '-') . $x;
+  $y_signed = (((int) $y) >= 0 ? '+' : '-') . $y;
+  $image->ops[] = '-crop ' . (int) $width . 'x' . (int) $height . $x_signed . $y_signed . '!';
+  $image->info['width'] = $width;
+  $image->info['height'] = $height;
+  return TRUE;
+}
+
+/**
+ * Converts an image into grayscale.
+ *
+ * @param $image
+ *   An image object. The $image->resource value will be modified by this call.
+ *
+ * @return
+ *   TRUE or FALSE, based on success.
+ *
+ * @see image_desaturate()
+ */
+function image_imagemagick_desaturate(stdClass $image) {
+  $image->ops[] = '-colorspace GRAY';
+  return TRUE;
+}
+
+/**
+ * Sharpens an image.
+ *
+ * @param $image
+ *   An image object. The $image->resource value will be modified by this call.
+ *
+ * @return
+ *   TRUE or FALSE, based on success.
+ *
+ * @see image_sharpen()
+ */
+function image_imagemagick_sharpen(stdClass $image, $radius, $sigma, $amount, $threshold) {
+  $unsharp_arg = $radius . 'x' . $sigma . '+' . $amount / 100 . '+' . $threshold;
+  $image->ops[] = '-unsharp ' . $unsharp_arg;
+  return TRUE;
+}
+
+/**
+ * Adds a watermark to an image.
+ *
+ * @param $image
+ *   An image object.
+ * @param $watermark
+ *   A string file URI or path of the watermark image.
+ *
+ * @return
+ *   TRUE or FALSE, based on success.
+ *
+ * @see image_watermark()
+ */
+function image_imagemagick_watermark(stdClass $image, $watermark) {
+  $image->ops[] = drupal_realpath($watermark);
+  $image->ops[] = '-composite';
+  $image->ops[] = "-set 'option:compose:outside-overlay' false";
+  return TRUE;
+}
+
+/**
+ * Creates an image resource from a file.
+ *
+ * @param $image
+ *   An image object. The $image->resource value will populated by this call.
+ *
+ * @return
+ *   TRUE or FALSE, based on success.
+ *
+ * @see image_load()
+ */
+function image_imagemagick_load(stdClass $image) {
+  $image->ops = array();
+  return $image;
+}
+
+/**
+ * Writes an image resource to a destination file.
+ *
+ * @param $image
+ *   An image object.
+ * @param $destination
+ *   A string file URI or path where the image should be saved.
+ *
+ * @return
+ *   TRUE or FALSE, based on success.
+ *
+ * @see image_save()
+ */
+function image_imagemagick_save(stdClass $image, $destination) {
+  return _imagemagick_convert($image->source, $destination, $image->ops);
+}
+
+/**
+ * Get details about an image.
+ *
+ * @param $image
+ *   An image object.
+ * @return
+ *   FALSE, if the file could not be found or is not an image. Otherwise, a
+ *   keyed array containing information about the image:
+ *   - "width": Width, in pixels.
+ *   - "height": Height, in pixels.
+ *   - "extension": Commonly used file extension for the image.
+ *   - "mime_type": MIME type ('image/jpeg', 'image/gif', 'image/png').
+ *
+ * @see image_get_info()
+ */
+function image_imagemagick_get_info(stdClass $image) {
+  $details = FALSE;
+  $data = getimagesize(drupal_realpath($image->source));
+
+  if (isset($data) && is_array($data)) {
+    $extensions = array('1' => 'gif', '2' => 'jpg', '3' => 'png');
+    $extension = isset($extensions[$data[2]]) ?  $extensions[$data[2]] : '';
+    $details = array(
+      'width'     => $data[0],
+      'height'    => $data[1],
+      'extension' => $extension,
+      'mime_type' => $data['mime'],
+    );
+  }
+
+  return $details;
+}
+
+/**
+ * Calls the convert executable with the specified filter.
+ */
+function _imagemagick_convert($source, $dest, $args) {
+  $source = drupal_realpath($source);
+  $dest = drupal_realpath($dest);
+
+  $args['quality'] = '-quality ' . escapeshellarg(variable_get('imagemagick_quality', 75));
+  // To make use of ImageMagick 6's parenthetical command grouping we need to make
+  // the $source image the first parameter and $dest the last.
+  // See http://www.imagemagick.org/Usage/basics/#cmdline for more info.
+  $command = escapeshellarg($source) . ' ' . implode(' ', $args) . ' ' . escapeshellarg($dest);
+
+  $status = _imagemagick_convert_exec($command, $output, $errors);
+  if ($status !== 0) {
+    return FALSE;
+  }
+  return file_exists($dest);
+}
+
+/**
+ * Executes the ImageMagick convert executable as shell command.
+ *
+ * @param $command_args
+ *   A string containing arguments to pass to the convert command, which must
+ *   have been passed through escapeshellarg() already.
+ * @param $output
+ *   (optional) A variable to assign the shell stdout to, passed by reference.
+ * @param $errors
+ *   (optional) A variable to assign the shell stderr to, passed by reference.
+ * @param $convert_path
+ *   (optional) A custom file path to the convert binary. Internal use only.
+ *
+ * @return
+ *   0 (zero) if the command succeeded, Boolean FALSE if the shell process could
+ *   not be executed, or the error status code returned by the executable.
+ */
+function _imagemagick_convert_exec($command_args, &$output = NULL, &$errors = NULL, $convert_path = NULL) {
+  if (!isset($convert_path)) {
+    // By using a default to NULL, we force users to setup the toolkit through
+    // the image toolkit administration UI. Sites enforcing a path via
+    // settings.php should know what they are doing.
+    $convert_path = variable_get('imagemagick_convert', NULL);
+    if (!isset($convert_path)) {
+      return FALSE;
+    }
+  }
+
+  // Use Drupal's root as working directory to resolve relative paths correctly.
+  $drupal_path = DRUPAL_ROOT;
+
+  if (strstr($_SERVER['SERVER_SOFTWARE'], 'Win32') || strstr($_SERVER['SERVER_SOFTWARE'], 'IIS')) {
+    // Use Window's start command with the /B flag to make the process run in
+    // the background and avoid a shell command line window from showing up.
+    // @see http://us3.php.net/manual/en/function.exec.php#56599
+    // Use /D to run the command from PHP's current working directory so the
+    // file paths don't have to be absolute.
+    $convert_path = 'start "ImageMagick" /D ' . escapeshellarg($drupal_path) . ' /B ' . escapeshellarg($convert_path);
+  }
+
+  $descriptors = array(
+    // stdin
+    0 => array('pipe', 'r'),
+    // stdout
+    1 => array('pipe', 'w'),
+    // stderr
+    2 => array('pipe', 'w'),
+  );
+  if ($h = proc_open($convert_path . ' ' . $command_args, $descriptors, $pipes, $drupal_path)) {
+    $output = '';
+    while (!feof($pipes[1])) {
+      $output .= fgets($pipes[1]);
+    }
+
+    $errors = '';
+    while (!feof($pipes[2])) {
+      $errors .= fgets($pipes[2]);
+    }
+
+    fclose($pipes[0]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    $return_code = proc_close($h);
+
+    // Display debugging information to authorized users.
+    if (variable_get('imagemagick_debug', FALSE) && user_access('administer site configuration')) {
+      debug($convert_path . ' ' . $command_args, t('ImageMagick command'), TRUE);
+      if ($output !== '') {
+        debug($output, t('ImageMagick output'), TRUE);
+      }
+      if ($errors !== '') {
+        debug($errors, t('ImageMagick errors'), TRUE);
+      }
+    }
+
+    if ($return_code != 0) {
+      // If ImageMagick returned a non-zero code, trigger a PHP error that will
+      // be caught by Drupal's error handler, logged to the watchdog and
+      // eventually displayed to the user if configured to do so.
+
+      // If $errors is empty, only report the error code.
+      if ($errors !== '') {
+        trigger_error(t('ImageMagick error @code', array('@code' => $return_code)), E_USER_ERROR);
+      }
+      // Otherwise report the error code, and the error message.
+      else {
+        trigger_error(t('ImageMagick error @code: @error', array(
+          '@code' => $return_code,
+          '@error' => $errors,
+        )), E_USER_ERROR);
+      }
+    }
+
+    return $return_code;
+  }
+  return FALSE;
+}
+
+/**
+ * @} End of "ingroup image".
+ */
+

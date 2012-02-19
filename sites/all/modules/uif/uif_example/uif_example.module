@@ -1,0 +1,119 @@
+<?php
+
+module_load_include('inc', 'uif_example', 'uif_example_tokens');
+
+/**
+ * @file
+ * An example module showing how to use the User Import Framework to import user data.
+*/
+
+/**
+ * Implementation of hook_uif_help().
+ */
+function uif_example_uif_help() {
+  $extra_help = '<p>' . t('The following fields are available for example.com users:') . '</p>';
+  $items = array(
+    t('first_name (optional) - the user\'s first name'),
+    t('last_name (required) - the user\'s last name'),
+    t('pmi_number (optional) - the user\'s PMI number'),
+    t('role (required) - the user\'s role. [B]oard, [M]ember'),
+  );
+  $extra_help .= theme('item_list', array('items' => $items));
+  return $extra_help;
+}
+
+/**
+ * Implementation of hook_uif_validate_header().
+ */
+function uif_example_uif_validate_header($header) {
+  $errors = array();
+  $known_fields = array('email', 'username', 'password', 'first_name', 'last_name', 'pmi_number', 'role');
+  $required_fields = array('last_name', 'role'); // don't need to check for email; that's done by UIF
+
+  // Check for columns we don't understand
+  foreach ($header as $field) {
+    if (!in_array($field, $known_fields)) {
+      drupal_set_message(t('Unknown column !field in the import file. Data in this column will be ignored.', array('!field' => $field)), 'warning');
+    }
+  }
+  
+  // Make sure everything we need is here.  Note: this doesn't get us off the hook for 
+  // checking every row as well.  See hook_uif_validate_user().
+  foreach ($required_fields as $field) {
+    if (!in_array($field, $header)) {
+      $errors[] = t('Field !field is required and is missing from the header.', array('!field' => $field));    
+    }
+  }
+  
+  return $errors;
+}
+
+/**
+ * Implementation of hook_uif_validate_user().
+ */
+function uif_example_uif_validate_user($user_data, $uid, $header) {
+  $errors = array();
+  $required_fields = array('last_name', 'role');  // don't need to check for email; that's done by UIF
+  
+  foreach ($required_fields as $field) {
+    if (empty($user_data[$field])) {
+      $errors[] = t('Field !field is required and is missing from the data.', array('!field' => $field));    
+    }
+  }
+
+  return $errors;
+}
+
+/**
+ * Implementation of hook_uif_pre_create().
+ *
+ * If you use entity API fields for your users, this is the way to go.
+ */
+function uif_example_uif_pre_create($account, $user_data) {
+  return uif_example_assign_fields($user_data);
+}
+
+/**
+ * Implementation of hook_uif_pre_update().
+ *
+ * If you use entity API fields for your users, this is the way to go.
+ */
+function uif_example_uif_pre_update($account, $user_data) {
+  return uif_example_assign_fields($user_data);
+}
+
+/**
+ * Helper function to assign fields for create or update.
+ */
+function uif_example_assign_fields($user_data) {
+    $fields = array();
+
+    // see http://hojtsy.hu/blog/2011-jan-31/drupal-7039s-new-multilingual-systems-part-4-node-translation
+    $fields['field_firstname'][LANGUAGE_NONE][0]['value'] = $user_data['first_name'];
+    $fields['field_lastname'][LANGUAGE_NONE][0]['value'] = $user_data['last_name'];
+    $fields['field_pmi_number'][LANGUAGE_NONE][0]['value'] = $user_data['pmi_number'];
+
+    switch($user_data['role']) {
+        case 'B':
+            $fields['roles'][4] = 4;
+            break;
+        case 'M':
+            $fields['roles'][5] = 5;
+            break;
+    }
+    return $fields;
+}
+
+/**
+ * Implementation of hook_uif_post_create().
+ */
+function uif_example_uif_post_create($account, $user_data) {
+  // You'd only use this if you needed to do something after user_save() is called.
+}
+
+/**
+ * Implementation of hook_uif_post_update().
+ */
+function uif_example_uif_post_update($account, $user_data) {
+  // You'd only use this if you needed to do something after user_save() is called.
+}

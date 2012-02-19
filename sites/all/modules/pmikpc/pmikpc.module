@@ -1,0 +1,187 @@
+<?php
+
+/**
+ * @file
+ * Module file for registrations.
+ */
+
+/**
+ * Event Creation: Using node/event/add function. 
+ * Event Registration: Registration Form
+ * Event View: Event view template
+ * Event Summary View: Event view in Summary for home page
+ */
+/**
+ * Implements hook_menu().
+ */
+global $base_path;
+
+/**
+ * Implements hook_admin_paths().
+ */
+function pmikpc_admin_paths() {
+  $paths = array(
+    // This is marked as an administrative path so that if it is visited from
+    // within the overlay, the user will stay within the overlay while the
+    // callback is being processed.
+    'node/*/register' => TRUE,
+  );
+  return $paths;
+}
+
+function pmikpc_block_info() {
+    $blocks['event_block'] = array(
+        'info' => t('Event Block'),
+    );
+    $blocks['allevents_block'] = array(
+        'info' => t('All Events Block'),
+    );
+    return $blocks;
+}
+
+/**
+ * Implementation of hook_block_view().
+ */
+function pmikpc_block_view($delta='') {
+    $block = array();
+    switch ($delta) {
+        case 'event_block':
+            $block['subject'] = t('');
+            $block['content'] = show_event_details();
+            break;
+        case 'allevents_block':
+            $block['subject'] = t('');
+            $block['content'] = all_events_table();
+            break;
+    }
+    return $block;
+}
+
+/**
+ * custom html block
+ * @return string
+ */
+function show_event_details() {
+    global $base_path;
+//    $image_path = $base_path . '/themes/pmi/cms/images/register_for_events.gif';
+    $node = node_load(arg(1));
+    $output = '<div id="pmiInnerPagesContent">';
+    if (registration_administer_registrations_access($node)) {
+        $output .= '
+        <div class="clearfix" style="float: right;">
+           | <a href="' . $base_path . 'node/' . arg(1) . '/registrations/list">Registrants</a>
+           | <a href="' . $base_path . 'node/' . arg(1) . '/registrations/settings">Settings</a>&nbsp;
+        </div>';
+    }
+    if (registration_register_page_access($node)) {
+        $output .= '
+        <div class="clearfix" style="float: right;">
+           <a href="' . $base_path . 'node/' . arg(1) . '/register"><img src="' . $base_path . 'themes/pmi/images/events_registration.gif" style="margin-top: -4px;"></a>
+        </div>';
+    }
+    $output .= '<h2 class="headingBlue">'.$node->title.'</h2>';
+    $output .= render(node_view($node));
+    $output .= '</div>';
+
+    return $output;
+}
+
+/*
+ * Shows event titles with hyperlinks in a table format
+ */
+function all_events_table() {
+    global $base_path;
+    $output = '
+    <div id="pmi_upcomingEvents"><img src="' . $base_path . 'themes/pmi/cms/images/upEvents.gif" alt="Upcoming Events" width="146" height="30"/>
+        <div>';
+    
+//    $query = db_select('node', 'n');
+//    $query->condition('n.type', 'events', '=')
+//          ->fields('n', array('nid', 'title'));
+//    $rs = $query->execute();
+  
+//    $query = new EntityFieldQuery();
+//    $query->entityCondition('entity_type', 'node')
+//        ->entityCondition('bundle', 'events')
+//        ->entityCondition('entity_type', 'field_collection_item')
+//        ->entityCondition('bundle', 'field_event_schedule')
+//        ->pager(3);
+//    $rs = $query->execute();
+
+    $sql = "SELECT n.title, fe.entity_id, fdt.field_event_day_title_value day_title, fdd.field_event_day_datetime_value day_datetime
+        FROM node n, field_data_field_event_schedule fe, field_data_field_event_day_datetime fdd, field_data_field_event_day_title fdt
+        WHERE n.type = 'events' AND n.nid = fe.entity_id
+        AND fe.entity_type = 'node' AND fe.field_event_schedule_value = fdd.entity_id AND fe.field_event_schedule_value = fdt.entity_id
+        AND fdd.entity_type = 'field_collection_item' AND fdd.bundle = 'field_event_schedule'
+        AND fdt.entity_type = 'field_collection_item' AND fdt.bundle = 'field_event_schedule'
+        ORDER BY fdd.field_event_day_datetime_value DESC" . $limit;
+    $rs = db_query($sql);
+
+    $eid = 0;
+    $days = 0;
+    $printed = true;
+    $dayinfo = array();
+    foreach ($rs as $rec) {
+        if ($eid != $rec->entity_id) {
+            if (!$printed) {
+                for ($i=$days-1; $i >= 0; $i--) {
+                    $output .= $dayinfo[$i];
+                    if ($i > 0) {
+                        $output .= ',&nbsp';
+                    }                   
+                }
+                $output .= '</span></li>';
+                $printed = true;
+                $days = 0;
+                $dayinfo = array();
+            }
+            $output .= '<li class="tdBlue">';
+            $output .= l($rec->title, 'events/'.$rec->entity_id);
+            $output .= '<br /><span style="color: gray; font-size: 11px; display: inline-block;">';
+            $eid = $rec->entity_id;
+            $printed = false;
+        }
+        $dayinfo[$days] .= $rec->day_title . ': ' . date("j M", strtotime($rec->day_datetime));
+        $days++;
+    }
+    if (!$printed) {
+        for ($i=$days-1; $i >= 0; $i--) {
+            $output .= $dayinfo[$i];
+            if ($i > 0) {
+                $output .= ',&nbsp';
+            }                   
+        }
+        $output .= '</span></li>';
+    }
+    $output .=
+    '   </div>
+    </div>
+    <div id="pmi_flashAds"><img src="' . $base_path . 'themes/pmi/cms/images/pmiFlashAdPicture1.jpg" width="246" height="108"></div>';
+    return $output;
+}
+
+/**
+ * Implements hook_form_alter().
+ */
+function pmikpc_form_alter(&$form, &$form_state, $form_id) {
+    global $base_path;
+
+    if ($form_id == 'registration_form') {
+        $event = $form_state['registration'];
+        if (registration_register_page_access($event)) {
+            // default email from existing registraiton or authenticated user
+            global $user;
+            $account = entity_load('user', array($user->uid));
+            $goto_url = 'events/' . $event->nid;
+
+            if (isset($user->uid) && intval($user->uid) > 0) {
+                $form['mail']['#default_value'] = $user->mail;
+                $form['field_firstname'][LANGUAGE_NONE][0]['value']['#default_value'] = $account[$user->uid]->field_firstname[LANGUAGE_NONE][0]['value'];
+                $form['field_lastname'][LANGUAGE_NONE][0]['value']['#default_value'] = $account[$user->uid]->field_lastname[LANGUAGE_NONE][0]['value'];
+            }
+
+            $form ['actions']['cancel']['#href'] = $goto_url;
+            $form_state['redirect'] = $goto_url;
+        }
+    }
+}

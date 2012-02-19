@@ -1,0 +1,158 @@
+<?php
+
+/**
+ * @file
+ * Module file for registrations.
+ */
+
+module_load_include('php', 'VyewAPI', 'VyewAPI');
+
+/**
+ * Room Creation: When new user is created. Each room will bind with the each user.
+ * Room Settings: At the time of creation
+ * Course Material Upload: Manually by Teacher/Manager from Vyew Console
+ * Event Creation: Using the Calendar tool, on creation of an event/meeting/training plan. 
+ * Join Meeting: "Join" event button on post login page, in Event list page.
+ * Logout: Signout URL / page from Vyew console
+ */
+/**
+ * Implements hook_menu().
+ */
+function vyew_api_menu() {
+//  $items['node/%node/registrations/broadcast'] = array(
+//    'title' => 'Email Registrants',
+//    'page callback' => 'drupal_get_form',
+//    'page arguments' => array('vyew_api_registrations_broadcast_form', 1),
+//    'access callback' => 'vyew_api_administer_registrations_access',
+//    'access arguments' => array(1),
+//    'file' => 'includes/registration.forms.inc',
+//    'weight' => 10,
+//    'type' => MENU_LOCAL_TASK,
+//  );
+//
+//  return $items;
+}
+
+/**
+ * Implements hook_permission().
+ */
+function vyew_api_permission() {
+//  return array(
+//    'administer registration' => array(
+//      'title' => t('Administer registration'),
+//      'description' => t('Perform administration tasks for Registrations.'),
+//      'restrict access' => TRUE,
+//    ),
+//    'view registration' => array(
+//      'title' => t('View registrations'),
+//    ),
+//    'add registration' => array(
+//      'title' => t('Add registrations'),
+//    ),
+//  );
+}
+
+
+/**
+ * Page callback for viewing registrations
+ */
+function vyew_api_registrations_page($node) {
+  $header = array(
+    array('data' => t('id'), 'field' => 'vyew_api_id', 'type' => 'property', 
+        'specifier' => 'vyew_api_id'),
+    array('data' => t('Email'), 'field' => 'mail', 'type' => 'property', 
+        'specifier' => 'mail'),
+    array('data' => t('Created By'), 'field' => 'author_uid', 
+        'type' => 'property', 'specifier' => 'author_uid'),
+    array('data' => t('Count'), 'field' => 'count', 'type' => 'property', 
+        'specifier' => 'count'),
+    array('data' => t('Created'), 'field' => 'created', 'sort' => 'desc', 
+        'type' => 'property', 'specifier' => 'created'),
+    array('data' => t('Actions')),
+  );
+  
+  $query = new EntityFieldQuery;
+  $result = $query
+    ->entityCondition('entity_type', 'registration')
+    ->propertyCondition('nid', $node->nid)
+    ->pager(20)
+    ->tableSort($header)
+    ->execute();
+    
+  if (!empty($result['registration'])) {
+    $registrations = vyew_api_load_multiple(array_keys($result['registration']));
+
+    $rows = array();
+    foreach ($registrations as $registration) {
+      $author = '';
+      if ($registration->author_uid) {
+        $author = user_load($registration->author_uid);
+        $author = l($author->name, 'user/' . $author->uid);
+      }
+      $actions = array(
+        l('View', 'registration/' . $registration->vyew_api_id),
+        l('Edit', 'registration/' . $registration->vyew_api_id . '/edit'),
+        l('Delete', 'registration/' . $registration->vyew_api_id . '/delete'),
+      );
+      $rows[] = array(
+        l($registration->vyew_api_id, 'registration/' . $registration->vyew_api_id),
+        l($registration->mail, 'mailto:' . $registration->mail),
+        $author,
+        $registration->count,
+        format_date($registration->created),
+        implode(' | ', $actions)
+      );
+    }
+
+    $settings = vyew_api_node_settings($node->nid);
+        
+    $table = array(
+      'header' => $header,
+      'rows' => $rows,
+      'caption' => t('List of registrations for %title. !count of !capacity slots are filled.', 
+        array(
+          '%title' => $node->title,
+          '!count' => '<strong>' . vyew_api_event_count($node->nid) . '</strong>', 
+          '!capacity' => '<strong>' . $settings['capacity'] . '</strong>'
+        ))
+    );
+
+    $out = theme('table', $table) . theme('pager');
+  }
+  else {
+    $out = t('There are no registratrants for %name', 
+        array('%name' => $node->title));
+  }
+
+  return $out;
+}
+
+
+/**
+ * Create Room
+ */
+function vyew_api_create_room() {
+    //Welcome shahbaz_ahmer@hotmail.com.
+    //Your API Key was registered successfully:
+    $api_key="00ea93810d";
+    $api_secret="81f1ff90046903fa649f";
+
+    require_once('VyewAPI.php');
+    $vyew = new VyewAPI($api_key, $api_secret);
+
+    //Create a new meeting room
+    $res=$vyew->create('Myfile.doc Meeting');
+    if($res[0]!=1) die("Failed to create meeting");
+    $vyewBookID=$res[2];
+    $roomURL=$res[3];
+    //now you could push the user to $roomURL in another browser window...
+
+    //Import some content from a local file on your server (over HTTP POST)
+    $res=$vyew->import($roomNumber, 'post:/path/to/Myfile.doc');
+
+    //Or... import content from a url
+    $res=$vyew->import($roomNumber, 'http://mywebsite.com/path/to/Myfile.doc');
+
+    //Invite some other people to the meeting,
+    $res=$vyew->invite($roomNumber, 'myFriend@gmail.com');
+}
